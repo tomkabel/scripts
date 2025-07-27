@@ -4,7 +4,7 @@ set -e
 
 # Install required OS packages
 apt-get update -y
-apt-get install -y ca-certificates build-essential libc6 runc lsb-release g++ wget curl git pigz xz-utils unzip jq vim tree openssl openssh-client whiptail tmux make
+apt-get install -y ca-certificates build-essential libc6 runc lsb-release g++ wget curl git pigz xz-utils unzip jq vim tree openssl openssh-client whiptail tmux make lz4
 
 # Add SSH public key to current user's ~/.ssh/authorized_keys
 SSH_PUB_KEY=""
