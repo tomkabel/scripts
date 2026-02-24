@@ -380,6 +380,7 @@ zinit snippet OMZL::functions.zsh
 zinit snippet OMZP::git
 zinit snippet OMZP::cp
 zinit snippet OMZP::extract
+zinit snippet OMZP::systemd
 
 # Autosuggestions
 zinit light zsh-users/zsh-autosuggestions
