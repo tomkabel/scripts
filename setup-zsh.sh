@@ -2,8 +2,8 @@
 
 # =============================================================================
 # Multi-Distribution Zsh Installer with Zinit
-# Description: Installs zsh, git, curl, fzf, bat, tree and configures
-#              a high-performance zsh environment using zinit plugin manager.
+# Description: Installs zsh, git, curl, fzf, bat, tree, zoxide, and direnv,
+#              then configures a high-performance Zsh environment with Zinit.
 # Supports: Ubuntu/Debian (apt), Arch Linux (pacman), Fedora (dnf), openSUSE (zypper)
 # Usage: ./setup-zsh.sh [--dry-run]
 # =============================================================================
@@ -14,11 +14,13 @@ set -euo pipefail
 # CONFIGURATION
 # =============================================================================
 
-readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.0.0"
+SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_NAME
+readonly SCRIPT_VERSION="2.1.0"
 readonly ZINIT_REPO="https://github.com/zdharma-continuum/zinit.git"
 readonly ZINIT_COMMIT=""  # Set to a specific commit hash to pin, leave empty for latest
-readonly TEMP_DIR="$(mktemp -d)"
+TEMP_DIR="$(mktemp -d)"
+readonly TEMP_DIR
 
 # Colors for output
 readonly RED='\033[0;31m'
@@ -33,11 +35,10 @@ readonly NC='\033[0m' # No Color
 
 DRY_RUN=false
 PACKAGE_MANAGER=""
-PACKAGE_MANAGER_CMD=""
 UPDATE_CMD=""
 TARGET_USER=""
 TARGET_HOME=""
-BAT_CMD="bat"  # Will be updated to 'batcat' on Ubuntu/Debian if needed
+BAT_CMD="batcat" # Will be updated to 'batcat' on Ubuntu/Debian if needed
 IS_DESKTOP=false
 
 # =============================================================================
@@ -151,19 +152,15 @@ check_sudo() {
 detect_package_manager() {
     if command -v apt-get >/dev/null 2>&1; then
         PACKAGE_MANAGER="apt"
-        PACKAGE_MANAGER_CMD="apt-get"
         UPDATE_CMD="apt-get update"
     elif command -v pacman >/dev/null 2>&1; then
         PACKAGE_MANAGER="pacman"
-        PACKAGE_MANAGER_CMD="pacman"
         UPDATE_CMD="pacman -Sy"
     elif command -v dnf >/dev/null 2>&1; then
         PACKAGE_MANAGER="dnf"
-        PACKAGE_MANAGER_CMD="dnf"
         UPDATE_CMD="dnf check-update"
     elif command -v zypper >/dev/null 2>&1; then
         PACKAGE_MANAGER="zypper"
-        PACKAGE_MANAGER_CMD="zypper"
         UPDATE_CMD="zypper refresh"
     else
         error "No supported package manager found (apt-get, pacman, dnf, or zypper)"
@@ -197,22 +194,22 @@ get_packages_for_pm() {
 
     case "$pm" in
         apt)
-            base_packages="zsh git curl fzf bat tree"
+    base_packages="zsh git curl fzf bat tree zoxide direnv"
             clipboard_pkg="wl-clipboard"
             BAT_CMD="batcat"
             ;;
         pacman)
-            base_packages="zsh git curl fzf bat tree"
+    base_packages="zsh git curl fzf bat tree zoxide direnv"
             clipboard_pkg="wl-clipboard"
             BAT_CMD="bat"
             ;;
         dnf)
-            base_packages="zsh git curl fzf bat tree"
+    base_packages="zsh git curl fzf bat tree zoxide direnv"
             clipboard_pkg="wl-clipboard"
             BAT_CMD="bat"
             ;;
         zypper)
-            base_packages="zsh git curl fzf bat tree"
+    base_packages="zsh git curl fzf bat tree zoxide direnv"
             clipboard_pkg="wl-clipboard"
             BAT_CMD="bat"
             ;;
@@ -308,24 +305,16 @@ generate_zshrc() {
     update_alias="$(get_update_alias "$PACKAGE_MANAGER")"
 
     local fzf_key_bindings=""
-    local fzf_completion=""
 
     case "$PACKAGE_MANAGER" in
         apt)
             fzf_key_bindings="/usr/share/doc/fzf/examples/key-bindings.zsh"
-            fzf_completion="/usr/share/doc/fzf/examples/completion.zsh"
             ;;
-        pacman)
+  pacman | zypper)
             fzf_key_bindings="/usr/share/fzf/key-bindings.zsh"
-            fzf_completion="/usr/share/fzf/completion.zsh"
             ;;
         dnf)
             fzf_key_bindings="/usr/share/fzf/shell/key-bindings.zsh"
-            fzf_completion="/usr/share/fzf/shell/completion.zsh"
-            ;;
-        zypper)
-            fzf_key_bindings="/usr/share/fzf/key-bindings.zsh"
-            fzf_completion="/usr/share/fzf/completion.zsh"
             ;;
     esac
 
@@ -340,6 +329,11 @@ generate_zshrc() {
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 export EDITOR='vim'
+
+# Set ZSH_PROFILE=1 for one startup to print a zprof breakdown at exit.
+if [[ -n "\${ZSH_PROFILE:-}" ]]; then
+    zmodload zsh/zprof
+fi
 
 # Zinit Bootstrap
 ZINIT_HOME="\${XDG_DATA_HOME:-\${HOME}/.local/share}/zinit/zinit.git"
@@ -382,18 +376,17 @@ zinit snippet OMZP::cp
 zinit snippet OMZP::extract
 zinit snippet OMZP::systemd
 
-# Autosuggestions
+# Autosuggestions and fuzzy tab completion. fzf-tab replaces the native fzf
+# completion script, avoiding duplicate compdef registrations and startup work.
 zinit light zsh-users/zsh-autosuggestions
+zinit light Aloxaf/fzf-tab
 
-# FZF Integration
+# Keep fzf's Ctrl-R and Ctrl-T key bindings, but let fzf-tab own completion.
 if [[ -f ${fzf_key_bindings} ]]; then
     source ${fzf_key_bindings}
 fi
-if [[ -f ${fzf_completion} ]]; then
-    source ${fzf_completion}
-fi
 
-# Completion System (Lazy Load Strategy)
+# Completion System (Initialize exactly once; audit the cache once per day)
 autoload -Uz compinit
 if [[ -n \${ZDOTDIR:-\$HOME}/.zcompdump(#qN.mh+24) ]]; then
     compinit
@@ -404,6 +397,15 @@ fi
 # Completion styling
 zstyle ':completion:*' list-colors "\${(s.:.)LS_COLORS}"
 zstyle ':completion:*' menu select
+
+# Linux-native tool integrations. Keep cd deterministic; use z for zoxide's
+# frecency-based directory jumps.
+if (( \$+commands[direnv] )); then
+    eval "\$(direnv hook zsh)"
+fi
+if (( \$+commands[zoxide] )); then
+    eval "\$(zoxide init zsh)"
+fi
 
 # Fast Syntax Highlighting (loaded last)
 zinit light zdharma-continuum/fast-syntax-highlighting
@@ -417,12 +419,34 @@ alias ...='cd ../..'
 alias update='${update_alias}'
 
 # bat alias (distro-specific)
-alias cat='${BAT_CMD} --paging=never'
+alias cati='${BAT_CMD} --paging=never'
 
 # Safety aliases
 alias rm='rm -I'
 alias cp='cp -i'
 alias mv='mv -i'
+
+# Fix for Ctrl+Left/Right
+bindkey -e
+bindkey '^A' beginning-of-line
+bindkey '^E' end-of-line
+bindkey '^K' kill-line
+bindkey '^U' backward-kill-line
+bindkey '^W' backward-kill-word
+bindkey '^R' history-incremental-search-backward
+bindkey "^[[1;5C" forward-word
+bindkey "^[[5C" forward-word
+bindkey "^[[1;5D" backward-word
+bindkey "^[[5D" backward-word
+
+# Fix for Home/End (often broken alongside these)
+bindkey "^[[1~" beginning-of-line
+bindkey "^[[4~" end-of-line
+
+# Print startup timings only when explicitly requested with ZSH_PROFILE=1.
+if [[ -n "\${ZSH_PROFILE:-}" ]]; then
+    zprof
+fi
 
 # =============================================================================
 EOF
@@ -545,7 +569,8 @@ install_packages() {
 
     log INFO "Validating package installation..."
     local missing_packages=()
-    for pkg in zsh git curl; do
+  local required_commands=(zsh git curl fzf tree direnv zoxide "$BAT_CMD")
+  for pkg in "${required_commands[@]}"; do
         if ! command -v "$pkg" >/dev/null 2>&1; then
             missing_packages+=("$pkg")
         fi
